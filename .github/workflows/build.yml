@@ -1,0 +1,37 @@
+name: test, build and push image to harbor
+
+on:
+  push:
+    branches:
+      - main
+      - "feat/**"
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: [generic, on-prem]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+      - run: npm test
+
+  build-and-push:
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: [generic, on-prem]
+    steps:
+      - name: Login to Harbor
+        run: echo "${{ secrets.HARBOR_SECRET }}" | docker login https://harbor.mybits.dev -u '${{ secrets.HARBOR_USER }}' --password-stdin
+      - uses: actions/checkout@v6
+      - name: Set image tag
+        id: vars
+        run: echo "tag=0.1.0-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: harbor.mybits.dev/digisucht/addon-digisucht-tools:${{ steps.vars.outputs.tag }}
