@@ -1,0 +1,15 @@
+{
+	"name": "oriso-addon-digisucht-tools",
+	"version": "0.1.0",
+	"private": true,
+	"description": "DigiSucht digital counselling tools as an ORISO add-on",
+	"license": "AGPL-3.0-only",
+	"type": "module",
+	"engines": {
+		"node": ">=24"
+	},
+	"scripts": {
+		"start": "node src/server.mjs",
+		"test": "node --test"
+	}
+}
