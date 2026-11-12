@@ -74,13 +74,30 @@ const parseInstant = (value) => {
 	return time;
 };
 
+const isAsker = (claims) => hasRole(claims, 'user') && !hasRole(claims, 'consultant');
+
 export const createApp = ({ store, verify, host = null, uiFiles = UI_FILES }) => {
+	/** Clients see the tool once it is released, with a badge until they open it; counsellors always. */
+	const visibilityOf = (claims, tenantId) => {
+		if (!isAsker(claims)) {
+			return { visible: true };
+		}
+		const release = store.releaseOf(tenantId, claims.sub);
+		if (!release) {
+			return { visible: false };
+		}
+		return release.openedAt ? { visible: true } : { visible: true, badge: 1 };
+	};
+
 	const loadSettings = async (claims) => ({ ...DEFAULT_SETTINGS, ...((await host?.settings(claims)) ?? {}) });
 
 	const asker = async (req, res, claims, tenantId) => {
 		const askerId = claims.sub;
 		const release = store.releaseOf(tenantId, askerId);
 		if (req.method === 'GET') {
+			if (release && !release.openedAt) {
+				store.markOpened(tenantId, askerId);
+			}
 			const settings = await loadSettings(claims);
 			const entry = store.entryOf(tenantId, askerId);
 			return json(res, 200, {
@@ -174,11 +191,13 @@ export const createApp = ({ store, verify, host = null, uiFiles = UI_FILES }) =>
 				}
 				return json(res, 200, { values: store.statistics(tenantId) });
 			}
+			if (path === '/visibility' && req.method === 'GET') {
+				return json(res, 200, { apps: { goals: visibilityOf(claims, tenantId) } });
+			}
 			if (path === '/calendar' && req.method === 'GET') {
 				const from = parseInstant(url.searchParams.get('from'));
 				const to = parseInstant(url.searchParams.get('to'));
-				const isAsker = hasRole(claims, 'user') && !hasRole(claims, 'consultant');
-				const entries = isAsker
+				const entries = isAsker(claims)
 					? calendarFor(store.releaseOf(tenantId, claims.sub), store.entryOf(tenantId, claims.sub))
 					: [];
 				const inRange = entries.filter(({ start }) => {
@@ -187,7 +206,7 @@ export const createApp = ({ store, verify, host = null, uiFiles = UI_FILES }) =>
 				});
 				return json(res, 200, { entries: inRange });
 			}
-			if (path === '/api/goals' && hasRole(claims, 'user') && !hasRole(claims, 'consultant')) {
+			if (path === '/api/goals' && isAsker(claims)) {
 				return await asker(req, res, claims, tenantId);
 			}
 			if (path.startsWith('/api/goals/client') && hasRole(claims, 'consultant')) {

@@ -16,6 +16,7 @@ export const openStore = (file) => {
 			tool TEXT NOT NULL,
 			released_by TEXT NOT NULL,
 			released_at TEXT NOT NULL,
+			opened_at TEXT,
 			PRIMARY KEY (tenant_id, asker_id, tool)
 		);
 		CREATE TABLE IF NOT EXISTS entries (
@@ -28,9 +29,16 @@ export const openStore = (file) => {
 			PRIMARY KEY (tenant_id, asker_id, tool)
 		);
 	`);
+	const releaseColumns = db.prepare('PRAGMA table_info(releases)').all().map(({ name }) => name);
+	if (!releaseColumns.includes('opened_at')) {
+		db.exec('ALTER TABLE releases ADD COLUMN opened_at TEXT');
+	}
 
 	const findRelease = db.prepare(
-		'SELECT released_by AS releasedBy, released_at AS releasedAt FROM releases WHERE tenant_id = ? AND asker_id = ? AND tool = ?'
+		'SELECT released_by AS releasedBy, released_at AS releasedAt, opened_at AS openedAt FROM releases WHERE tenant_id = ? AND asker_id = ? AND tool = ?'
+	);
+	const markOpened = db.prepare(
+		'UPDATE releases SET opened_at = ? WHERE tenant_id = ? AND asker_id = ? AND tool = ? AND opened_at IS NULL'
 	);
 	const insertRelease = db.prepare(
 		'INSERT OR IGNORE INTO releases (tenant_id, asker_id, tool, released_by, released_at) VALUES (?, ?, ?, ?, ?)'
@@ -56,6 +64,9 @@ export const openStore = (file) => {
 		},
 		releaseOf(tenantId, askerId) {
 			return findRelease.get(tenantId, askerId, TOOL) ?? null;
+		},
+		markOpened(tenantId, askerId) {
+			markOpened.run(new Date().toISOString(), tenantId, askerId, TOOL);
 		},
 		entryOf(tenantId, askerId) {
 			const row = findEntry.get(tenantId, askerId, TOOL);

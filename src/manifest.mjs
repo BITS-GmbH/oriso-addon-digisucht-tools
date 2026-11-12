@@ -17,7 +17,8 @@ export const manifest = {
 		{
 			id: 'goals',
 			title: { de: 'Ausgangssituation und Ziele', en: 'Starting point and goals' },
-			slots: ['asker.navigation', 'consultant.session', 'consultant.asker-profile']
+			slots: ['asker.navigation', 'consultant.session', 'consultant.asker-profile'],
+			visibility: 'dynamic'
 		}
 	],
 	health: '/health'

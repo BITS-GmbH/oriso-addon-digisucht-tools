@@ -36,9 +36,15 @@ DigiSucht tool (`src/questions.mjs`, formal and informal).
     that is neither shared nor fully answered, one all-day `reminder` "Ausgangssituation und Ziele
     ausfüllen" due seven days after the release, linking to `asker.navigation`; filtered to
     `from <= start < to`. Counsellors get no entries.
+- Visibility: the app `goals` is `"visibility": "dynamic"`, so the AddonService asks
+  `GET /visibility` (user token) before listing it. A client sees it only once it is released,
+  with `badge: 1` until their first `GET /api/goals` (stored as `opened_at` of the release);
+  counsellors always see it, without a badge. The release notification makes the AddonService
+  drop its cached answer, so the tool appears for the client right away.
 - Statistics: `GET /stats?tenantId=` with the AddonService's service token.
 - Data: SQLite (`node:sqlite`) in `DATA_FILE` (default `/data/tools.db`), one row per client and
-  tool for the release and for the answers.
+  tool for the release and for the answers. Columns added later (`releases.opened_at`) are added on
+  start.
 - UI: `ui/entry.js`, no build step; React comes from the web app
   (`globalThis.__ORISO_ADDON_SHARED__`), the questions from `src/questions.mjs`.
 

@@ -2,6 +2,10 @@ import { after, before, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, sign } from 'node:crypto';
 import { createServer } from 'node:http';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { createApp, cleanAnswers } from '../src/app.mjs';
 import { createVerifier } from '../src/auth.mjs';
 import { createHost } from '../src/host.mjs';
@@ -118,6 +122,7 @@ describe('public files', () => {
 		assert.match((await call('/ui/entry.js')).body, /export async function mount/);
 		assert.match((await call('/ui/questions.mjs')).body, /export const QUESTIONS/);
 		assert.equal(manifest.body.calendar, '/calendar');
+		assert.equal(manifest.body.apps[0].visibility, 'dynamic');
 	});
 });
 
@@ -347,6 +352,58 @@ describe('calendar', () => {
 	it('has nothing for counsellors', async () => {
 		const auth = token({ sub: 'consultant-1', roles: ['consultant'] });
 		assert.deepEqual((await calendar(auth)).body, { entries: [] });
+	});
+});
+
+describe('visibility', () => {
+	const visibility = async (auth) => (await call('/visibility', { auth })).body;
+
+	it('needs a token', async () => {
+		assert.equal((await call('/visibility')).status, 401);
+	});
+
+	it('shows the tool to a client once released, with a badge until the client opens it', async () => {
+		const auth = askerToken('asker-30');
+		assert.deepEqual(await visibility(auth), { apps: { goals: { visible: false } } });
+
+		await call('/api/goals', { auth });
+		await release(counsellorFor('asker-30'));
+		assert.deepEqual(await visibility(auth), { apps: { goals: { visible: true, badge: 1 } } });
+
+		await call('/api/goals', { auth });
+		assert.deepEqual(await visibility(auth), { apps: { goals: { visible: true } } });
+
+		await release(counsellorFor('asker-30'));
+		assert.deepEqual(await visibility(auth), { apps: { goals: { visible: true } } });
+	});
+
+	it('always shows the tool to counsellors, without a badge', async () => {
+		assert.deepEqual(await visibility(token({ sub: 'consultant-1', roles: ['consultant'] })), {
+			apps: { goals: { visible: true } }
+		});
+		assert.deepEqual(await visibility(counsellorFor('asker-31')), { apps: { goals: { visible: true } } });
+	});
+});
+
+describe('store', () => {
+	it('adds opened_at to a database created before it existed', () => {
+		const file = join(mkdtempSync(join(tmpdir(), 'tools-')), 'tools.db');
+		const old = new DatabaseSync(file);
+		old.exec(`CREATE TABLE releases (
+			tenant_id INTEGER NOT NULL, asker_id TEXT NOT NULL, tool TEXT NOT NULL,
+			released_by TEXT NOT NULL, released_at TEXT NOT NULL, PRIMARY KEY (tenant_id, asker_id, tool))`);
+		old.prepare('INSERT INTO releases VALUES (1, ?, ?, ?, ?)').run('asker-1', 'goals', 'c-1', '2026-01-01T00:00:00.000Z');
+		old.close();
+
+		const store = openStore(file);
+		assert.equal(store.releaseOf(1, 'asker-1').openedAt, null);
+		store.markOpened(1, 'asker-1');
+		const openedAt = store.releaseOf(1, 'asker-1').openedAt;
+		assert.ok(openedAt);
+		store.markOpened(1, 'asker-1');
+		assert.equal(store.releaseOf(1, 'asker-1').openedAt, openedAt);
+		store.close();
+		assert.equal(openStore(file).releaseOf(1, 'asker-1').openedAt, openedAt);
 	});
 });
 
