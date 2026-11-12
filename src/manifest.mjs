@@ -7,6 +7,7 @@ export const manifest = {
 	react: '^19',
 	ui: '/ui/entry.js',
 	settings: '/schema/settings.json',
+	calendar: '/calendar',
 	stats: [
 		{ id: 'released', label: { de: 'Freigegeben', en: 'Released' }, type: 'count' },
 		{ id: 'started', label: { de: 'Bearbeitet', en: 'Started' }, type: 'count' },

@@ -1,9 +1,12 @@
-import { after, before, describe, it } from 'node:test';
+import { after, before, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, sign } from 'node:crypto';
+import { createServer } from 'node:http';
 import { createApp, cleanAnswers } from '../src/app.mjs';
 import { createVerifier } from '../src/auth.mjs';
+import { createHost } from '../src/host.mjs';
 import { openStore } from '../src/store.mjs';
+import { QUESTION_IDS } from '../src/questions.mjs';
 
 const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const jwks = { keys: [{ ...publicKey.export({ format: 'jwk' }), kid: 'k1', alg: 'RS256', use: 'sig' }] };
@@ -28,18 +31,47 @@ const counsellorWithoutClient = token({ sub: 'consultant-1', roles: ['consultant
 const service = token({ sub: 'addonservice', roles: ['addon-service'] });
 
 let settings = { intro: 'Hallo', allowSharing: true };
+let hostBehaviour = 'ok';
+let hostCalls = [];
 let server;
+let hostServer;
 let base;
+
+const takeHostCalls = () => {
+	const calls = hostCalls;
+	hostCalls = [];
+	return calls;
+};
+
+const startHost = () =>
+	createServer(async (req, res) => {
+		if (req.url === '/addons/host/settings') {
+			res.writeHead(200, { 'Content-Type': 'application/json' });
+			return res.end(JSON.stringify(settings));
+		}
+		const chunks = [];
+		for await (const chunk of req) {
+			chunks.push(chunk);
+		}
+		hostCalls.push({
+			method: req.method,
+			path: req.url,
+			authorization: req.headers.authorization,
+			body: JSON.parse(Buffer.concat(chunks).toString('utf8'))
+		});
+		if (hostBehaviour === 'hang') {
+			return;
+		}
+		const status = hostBehaviour === 'fail' ? 500 : req.url.endsWith('/audit') ? 201 : 202;
+		res.writeHead(status, { 'Content-Type': 'application/json' });
+		res.end(JSON.stringify(status === 202 ? { id: 'n1' } : {}));
+	});
 
 const fetchImpl = async (url, init) => {
 	if (String(url).endsWith('/jwks.json')) {
 		return new Response(JSON.stringify(jwks));
 	}
-	if (String(url).endsWith('/host/settings')) {
-		assert.match(init.headers.Authorization, /^Bearer /);
-		return new Response(JSON.stringify(settings));
-	}
-	throw new Error(`unexpected fetch ${url}`);
+	return fetch(url, init);
 };
 
 const call = async (path, { auth, method = 'GET', body } = {}) => {
@@ -56,6 +88,9 @@ const call = async (path, { auth, method = 'GET', body } = {}) => {
 };
 
 before(async () => {
+	hostServer = startHost();
+	await new Promise((resolve) => hostServer.listen(0, '127.0.0.1', resolve));
+	const hostUrl = `http://127.0.0.1:${hostServer.address().port}/addons/host`;
 	const store = openStore(':memory:');
 	const verify = createVerifier({
 		jwksUrl: 'http://addonservice/addons/.well-known/jwks.json',
@@ -63,12 +98,16 @@ before(async () => {
 		audience: 'digisucht-tools',
 		fetchImpl
 	});
-	server = createApp({ store, verify, settingsUrl: 'http://addonservice/addons/host/settings', fetchImpl });
+	server = createApp({ store, verify, host: createHost({ url: hostUrl, fetchImpl, timeoutMs: 300 }) });
 	await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 	base = `http://127.0.0.1:${server.address().port}`;
 });
 
-after(() => server.close());
+after(() => {
+	server.close();
+	hostServer.closeAllConnections();
+	hostServer.close();
+});
 
 describe('public files', () => {
 	it('serves manifest, settings schema and both UI modules', async () => {
@@ -78,6 +117,7 @@ describe('public files', () => {
 		assert.equal((await call('/schema/settings.json')).body.type, 'object');
 		assert.match((await call('/ui/entry.js')).body, /export async function mount/);
 		assert.match((await call('/ui/questions.mjs')).body, /export const QUESTIONS/);
+		assert.equal(manifest.body.calendar, '/calendar');
 	});
 });
 
@@ -138,6 +178,175 @@ describe('the goals tool', () => {
 		assert.equal((await call('/stats?tenantId=2', { auth: service })).status, 403);
 		const stats = await call('/stats?tenantId=1', { auth: service });
 		assert.deepEqual(stats.body.values, { released: 1, started: 1, shared: 0 });
+	});
+});
+
+const counsellorFor = (askerId, claims = {}) =>
+	token({ sub: 'consultant-1', roles: ['consultant'], askerId, sessionId: 9, ...claims });
+const askerToken = (sub) => token({ sub, roles: ['user'] });
+const release = (auth) => call('/api/goals/client/release', { auth, method: 'POST' });
+
+beforeEach(() => {
+	takeHostCalls();
+	hostBehaviour = 'ok';
+});
+
+describe('host notifications and audit entries', () => {
+	it('audits a release and notifies the client formally, once', async () => {
+		const auth = counsellorFor('asker-10');
+		assert.equal((await release(auth)).status, 200);
+		const calls = takeHostCalls().sort((a, b) => a.path.localeCompare(b.path));
+		assert.deepEqual(calls, [
+			{
+				method: 'POST',
+				path: '/addons/host/audit',
+				authorization: `Bearer ${auth}`,
+				body: {
+					action: 'tool.released',
+					appId: 'goals',
+					summary: {
+						de: 'Tool „Ausgangssituation und Ziele“ freigegeben',
+						en: 'Released tool “Starting point and goals”'
+					},
+					subject: 'asker'
+				}
+			},
+			{
+				method: 'POST',
+				path: '/addons/host/notifications',
+				authorization: `Bearer ${auth}`,
+				body: {
+					recipient: 'asker',
+					appId: 'goals',
+					important: true,
+					title: { de: 'Neues Tool freigegeben', en: 'New tool released' },
+					text: {
+						de: 'Ihre Beratung hat „Ausgangssituation und Ziele“ für Sie freigegeben.',
+						en: 'Your counsellor released “Starting point and goals” for you.'
+					},
+					target: { slot: 'asker.navigation' }
+				}
+			}
+		]);
+
+		assert.equal((await release(auth)).status, 200);
+		assert.deepEqual(takeHostCalls(), []);
+	});
+
+	it('uses informal address when the settings or the token ask for it', async () => {
+		settings = { ...settings, informal: true };
+		await release(counsellorFor('asker-11'));
+		settings = { intro: 'Hallo', allowSharing: true };
+		await release(counsellorFor('asker-12', { formalLanguage: false }));
+		const texts = takeHostCalls()
+			.filter((entry) => entry.path.endsWith('/notifications'))
+			.map((entry) => entry.body.text.de);
+		assert.deepEqual(texts, [
+			'Deine Beratung hat „Ausgangssituation und Ziele“ für dich freigegeben.',
+			'Deine Beratung hat „Ausgangssituation und Ziele“ für dich freigegeben.'
+		]);
+	});
+
+	it('releases even when the host API fails or does not answer', async () => {
+		hostBehaviour = 'fail';
+		const failed = await release(counsellorFor('asker-13'));
+		assert.equal(failed.status, 200);
+		assert.equal(failed.body.released, true);
+
+		hostBehaviour = 'hang';
+		const started = Date.now();
+		const hung = await release(counsellorFor('asker-14'));
+		assert.equal(hung.status, 200);
+		assert.ok(Date.now() - started < 2000);
+		assert.equal(takeHostCalls().length, 4);
+	});
+
+	it('audits sharing by the client once and notifies nobody', async () => {
+		await release(counsellorFor('asker-15'));
+		takeHostCalls();
+		const auth = askerToken('asker-15');
+		const save = (shared) => call('/api/goals', { auth, method: 'PUT', body: { answers: { goal: 'a' }, shared } });
+
+		await save(false);
+		assert.deepEqual(takeHostCalls(), []);
+
+		hostBehaviour = 'fail';
+		assert.equal((await save(true)).status, 200);
+		assert.deepEqual(takeHostCalls(), [
+			{
+				method: 'POST',
+				path: '/addons/host/audit',
+				authorization: `Bearer ${auth}`,
+				body: {
+					action: 'answers.shared',
+					appId: 'goals',
+					summary: {
+						de: 'Antworten zu „Ausgangssituation und Ziele“ mit der Beratung geteilt',
+						en: 'Shared answers to “Starting point and goals” with counselling'
+					},
+					subject: 'self'
+				}
+			}
+		]);
+
+		await save(true);
+		assert.deepEqual(takeHostCalls(), []);
+	});
+});
+
+describe('calendar', () => {
+	const calendar = (auth, query = '') => call(`/calendar${query}`, { auth });
+	const DAY = 24 * 60 * 60 * 1000;
+
+	it('needs a token and valid instants', async () => {
+		assert.equal((await calendar(undefined)).status, 401);
+		assert.equal((await calendar(askerToken('asker-20'), '?from=yesterday')).status, 400);
+	});
+
+	it('reminds a released client a week after the release until the answers are shared or complete', async () => {
+		const auth = askerToken('asker-20');
+		assert.deepEqual((await calendar(auth)).body, { entries: [] });
+
+		const { releasedAt } = (await release(counsellorFor('asker-20'))).body;
+		const due = new Date(Date.parse(releasedAt) + 7 * DAY).toISOString();
+		const { entries } = (await calendar(auth)).body;
+		assert.deepEqual(entries, [
+			{
+				id: 'goals-fill-in',
+				appId: 'goals',
+				kind: 'reminder',
+				title: { de: 'Ausgangssituation und Ziele ausfüllen', en: 'Fill in starting point and goals' },
+				start: due,
+				allDay: true,
+				link: { slot: 'asker.navigation' }
+			}
+		]);
+
+		const range = (from, to) => `?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+		const now = Date.now();
+		const iso = (time) => new Date(time).toISOString();
+		assert.equal((await calendar(auth, range(iso(now), iso(now + 30 * DAY)))).body.entries.length, 1);
+		assert.equal((await calendar(auth, range(iso(now), iso(now + 2 * DAY)))).body.entries.length, 0);
+		assert.equal((await calendar(auth, range(iso(now + 10 * DAY), iso(now + 30 * DAY)))).body.entries.length, 0);
+		assert.equal((await calendar(auth, range(due, iso(Date.parse(due) + 1)))).body.entries.length, 1);
+
+		await call('/api/goals', { auth, method: 'PUT', body: { answers: { goal: 'a' }, shared: false } });
+		assert.equal((await calendar(auth)).body.entries.length, 1);
+		await call('/api/goals', { auth, method: 'PUT', body: { answers: { goal: 'a' }, shared: true } });
+		assert.deepEqual((await calendar(auth)).body.entries, []);
+	});
+
+	it('counts a complete, unshared answer set as done', async () => {
+		const auth = askerToken('asker-21');
+		await release(counsellorFor('asker-21'));
+		const answers = Object.fromEntries(QUESTION_IDS.map((id) => [id, 'x']));
+		await call('/api/goals', { auth, method: 'PUT', body: { answers, shared: false } });
+		assert.deepEqual((await calendar(auth)).body.entries, []);
+	});
+
+	it('has nothing for counsellors', async () => {
+		const auth = token({ sub: 'consultant-1', roles: ['consultant'] });
+		assert.deepEqual((await calendar(auth)).body, { entries: [] });
 	});
 });
 

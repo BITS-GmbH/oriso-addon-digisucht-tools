@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { manifest, settingsSchema } from './manifest.mjs';
 import { MAX_ANSWER_LENGTH, QUESTION_IDS } from './questions.mjs';
 import { hasRole } from './auth.mjs';
+import { calendarFor, isInformal, releaseNotification, RELEASED_AUDIT, SHARED_AUDIT } from './messages.mjs';
 
 const SERVICE_ROLE = 'addon-service';
 const DEFAULT_SETTINGS = Object.fromEntries(
@@ -62,21 +63,19 @@ export const UI_FILES = {
 	'/ui/questions.mjs': new URL('./questions.mjs', import.meta.url)
 };
 
-export const createApp = ({ store, verify, settingsUrl, fetchImpl = fetch, uiFiles = UI_FILES }) => {
-	const loadSettings = async (claims) => {
-		if (!settingsUrl) {
-			return DEFAULT_SETTINGS;
-		}
-		try {
-			const response = await fetchImpl(settingsUrl, {
-				headers: { Authorization: `Bearer ${claims.token}` },
-				signal: AbortSignal.timeout(3000)
-			});
-			return response.ok ? { ...DEFAULT_SETTINGS, ...(await response.json()) } : DEFAULT_SETTINGS;
-		} catch {
-			return DEFAULT_SETTINGS;
-		}
-	};
+const parseInstant = (value) => {
+	if (value === null) {
+		return null;
+	}
+	const time = Date.parse(value);
+	if (Number.isNaN(time)) {
+		throw Object.assign(new Error('from and to must be ISO instants'), { status: 400 });
+	}
+	return time;
+};
+
+export const createApp = ({ store, verify, host = null, uiFiles = UI_FILES }) => {
+	const loadSettings = async (claims) => ({ ...DEFAULT_SETTINGS, ...((await host?.settings(claims)) ?? {}) });
 
 	const asker = async (req, res, claims, tenantId) => {
 		const askerId = claims.sub;
@@ -100,7 +99,11 @@ export const createApp = ({ store, verify, settingsUrl, fetchImpl = fetch, uiFil
 			const body = await readJson(req);
 			const settings = await loadSettings(claims);
 			const shared = settings.allowSharing !== false && body.shared === true;
+			const wasShared = store.entryOf(tenantId, askerId)?.shared ?? false;
 			const entry = store.saveEntry(tenantId, askerId, cleanAnswers(body.answers), shared);
+			if (shared && !wasShared) {
+				await host?.audit(claims, SHARED_AUDIT);
+			}
 			return json(res, 200, entry);
 		}
 		return json(res, 405, { error: 'method not allowed' });
@@ -123,7 +126,15 @@ export const createApp = ({ store, verify, settingsUrl, fetchImpl = fetch, uiFil
 			});
 		}
 		if (path === '/api/goals/client/release' && req.method === 'POST') {
+			const isNew = !store.releaseOf(tenantId, claims.askerId);
 			const release = store.release(tenantId, claims.askerId, claims.sub);
+			if (isNew && host) {
+				const settings = await loadSettings(claims);
+				await Promise.all([
+					host.audit(claims, RELEASED_AUDIT),
+					host.notify(claims, releaseNotification(isInformal(claims, settings)))
+				]);
+			}
 			return json(res, 200, { released: true, releasedAt: release.releasedAt });
 		}
 		return json(res, 404, { error: 'not found' });
@@ -162,6 +173,19 @@ export const createApp = ({ store, verify, settingsUrl, fetchImpl = fetch, uiFil
 					return json(res, 403, { error: 'forbidden' });
 				}
 				return json(res, 200, { values: store.statistics(tenantId) });
+			}
+			if (path === '/calendar' && req.method === 'GET') {
+				const from = parseInstant(url.searchParams.get('from'));
+				const to = parseInstant(url.searchParams.get('to'));
+				const isAsker = hasRole(claims, 'user') && !hasRole(claims, 'consultant');
+				const entries = isAsker
+					? calendarFor(store.releaseOf(tenantId, claims.sub), store.entryOf(tenantId, claims.sub))
+					: [];
+				const inRange = entries.filter(({ start }) => {
+					const time = Date.parse(start);
+					return (from === null || time >= from) && (to === null || time < to);
+				});
+				return json(res, 200, { entries: inRange });
 			}
 			if (path === '/api/goals' && hasRole(claims, 'user') && !hasRole(claims, 'consultant')) {
 				return await asker(req, res, claims, tenantId);

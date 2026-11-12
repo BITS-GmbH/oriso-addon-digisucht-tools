@@ -22,6 +22,20 @@ DigiSucht tool (`src/questions.mjs`, formal and informal).
   Clients are identified by `sub`; counsellors only get a client when the web app sent the
   session and the AddonService verified access (`askerId` claim).
 - Settings come from the AddonService host API (`/addons/host/settings`) with the same token.
+- Host capabilities (contract `docs/contract-v1-notifications-audit-calendar.md` in the AddonService,
+  texts in `src/messages.mjs`), called with the incoming token and a 2 s timeout; a failing call
+  is logged and never fails the user's action:
+  - Release by a counsellor (first time only): audit entry `tool.released` (subject `asker`) and
+    an important notification to the client (`recipient: "asker"`, app `goals`, slot
+    `asker.navigation`), formal unless the token (`informal: true` or `formalLanguage: false`)
+    or the settings (`informal: true`) ask for informal address.
+  - Client shares the answers (when switching from not shared to shared): audit entry
+    `answers.shared` (subject `self`). The counsellor is not notified, v1 only addresses `self`
+    and `asker`.
+  - Calendar (`GET /calendar?from=&to=`, manifest `calendar`): for a client with a released tool
+    that is neither shared nor fully answered, one all-day `reminder` "Ausgangssituation und Ziele
+    ausfüllen" due seven days after the release, linking to `asker.navigation`; filtered to
+    `from <= start < to`. Counsellors get no entries.
 - Statistics: `GET /stats?tenantId=` with the AddonService's service token.
 - Data: SQLite (`node:sqlite`) in `DATA_FILE` (default `/data/tools.db`), one row per client and
   tool for the release and for the answers.
@@ -30,7 +44,6 @@ DigiSucht tool (`src/questions.mjs`, formal and informal).
 
 ## Not yet
 
-- Notifying the client when a counsellor releases the tool (needs a notification host API).
 - Deleting a client's data when the account is deleted (needs ORISO deletion events).
 - PDF export and the central data export.
 

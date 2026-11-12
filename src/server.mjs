@@ -1,5 +1,6 @@
 import { createApp } from './app.mjs';
 import { createVerifier } from './auth.mjs';
+import { createHost } from './host.mjs';
 import { NAME } from './manifest.mjs';
 import { openStore } from './store.mjs';
 
@@ -16,7 +17,7 @@ const verify = createVerifier({
 const server = createApp({
 	store,
 	verify,
-	settingsUrl: `${ADDONSERVICE}/addons/host/settings`
+	host: createHost({ url: `${ADDONSERVICE}/addons/host` })
 });
 
 server.listen(port, () => console.log(`${NAME} on :${port}, AddonService ${ADDONSERVICE}`));
