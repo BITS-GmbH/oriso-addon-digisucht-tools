@@ -3,7 +3,14 @@ import { readFile } from 'node:fs/promises';
 import { manifest, settingsSchema } from './manifest.mjs';
 import { MAX_ANSWER_LENGTH, QUESTION_IDS } from './questions.mjs';
 import { hasRole } from './auth.mjs';
-import { calendarFor, isInformal, releaseNotification, RELEASED_AUDIT, SHARED_AUDIT } from './messages.mjs';
+import {
+	calendarFor,
+	isInformal,
+	releaseNotification,
+	RELEASED_AUDIT,
+	SHARED_AUDIT,
+	sharedNotification
+} from './messages.mjs';
 
 const SERVICE_ROLE = 'addon-service';
 const DEFAULT_SETTINGS = Object.fromEntries(
@@ -118,8 +125,9 @@ export const createApp = ({ store, verify, host = null, uiFiles = UI_FILES }) =>
 			const shared = settings.allowSharing !== false && body.shared === true;
 			const wasShared = store.entryOf(tenantId, askerId)?.shared ?? false;
 			const entry = store.saveEntry(tenantId, askerId, cleanAnswers(body.answers), shared);
-			if (shared && !wasShared) {
-				await host?.audit(claims, SHARED_AUDIT);
+			if (shared && !wasShared && host) {
+				await host.audit(claims, SHARED_AUDIT);
+				await host.notify(claims, sharedNotification());
 			}
 			return json(res, 200, entry);
 		}
@@ -144,6 +152,14 @@ export const createApp = ({ store, verify, host = null, uiFiles = UI_FILES }) =>
 		}
 		if (path === '/api/goals/client/release' && req.method === 'POST') {
 			const isNew = !store.releaseOf(tenantId, claims.askerId);
+			// A new release starts new counselling work; it follows the Träger's DPA gate. If the host
+			// cannot tell, the release goes ahead (the Träger switch is the operator's control).
+			if (isNew && host) {
+				const gates = await host.gates(claims);
+				if (gates?.dpa?.newCounsellingAllowed === false) {
+					return json(res, 409, { error: 'dpa', message: 'The Träger has not confirmed the current DPA' });
+				}
+			}
 			const release = store.release(tenantId, claims.askerId, claims.sub);
 			if (isNew && host) {
 				const settings = await loadSettings(claims);
@@ -185,6 +201,19 @@ export const createApp = ({ store, verify, host = null, uiFiles = UI_FILES }) =>
 				return json(res, 403, { error: 'no Träger' });
 			}
 
+			if (path === '/events' && req.method === 'POST') {
+				if (!hasRole(claims, SERVICE_ROLE)) {
+					return json(res, 403, { error: 'forbidden' });
+				}
+				const event = await readJson(req);
+				if (event.type === 'user.deleted' && typeof event.userId === 'string' && event.userId) {
+					const removed =
+						event.role === 'consultant' ? store.forgetCounsellor(event.userId) : store.deleteAsker(event.userId);
+					console.log(`lifecycle ${event.id} user.deleted (${event.role ?? 'asker'}): ${removed} row(s)`);
+				}
+				res.writeHead(204);
+				return res.end();
+			}
 			if (path === '/stats') {
 				if (!hasRole(claims, SERVICE_ROLE) || Number(url.searchParams.get('tenantId')) !== tenantId) {
 					return json(res, 403, { error: 'forbidden' });

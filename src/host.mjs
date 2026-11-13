@@ -24,7 +24,17 @@ export const createHost = ({ url, fetchImpl = fetch, timeoutMs = 2000 }) => {
 		}
 	};
 
+	const getJson = async (path, claims) => {
+		try {
+			const response = await request(path, claims);
+			return response.ok ? await response.json() : null;
+		} catch {
+			return null;
+		}
+	};
 	return {
+		/** Core gates of the Träger, e.g. `{ dpa: { newCounsellingAllowed } }`; null if the host cannot tell. */
+		gates: (claims) => getJson('/gates', claims),
 		async settings(claims) {
 			try {
 				const response = await request('/settings', claims);

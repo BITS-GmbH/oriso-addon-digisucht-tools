@@ -21,6 +21,19 @@ export const releaseNotification = (informal) => ({
 	target: { slot: SLOT }
 });
 
+/** To the client's counsellors when the client shares the answers; counsellors are addressed formally. */
+export const sharedNotification = () => ({
+	recipient: 'counsellors',
+	appId: APP_ID,
+	important: false,
+	title: { de: 'Antworten geteilt', en: 'Answers shared' },
+	text: {
+		de: 'Eine ratsuchende Person hat ihre Antworten zu „Ausgangssituation und Ziele“ mit Ihnen geteilt.',
+		en: 'A client shared their answers to “Starting point and goals” with you.'
+	},
+	target: { slot: 'consultant.session' }
+});
+
 export const RELEASED_AUDIT = {
 	action: 'tool.released',
 	appId: APP_ID,

@@ -8,6 +8,7 @@ export const manifest = {
 	ui: '/ui/entry.js',
 	settings: '/schema/settings.json',
 	calendar: '/calendar',
+	events: ['user.deleted'],
 	stats: [
 		{ id: 'released', label: { de: 'Freigegeben', en: 'Released' }, type: 'count' },
 		{ id: 'started', label: { de: 'Bearbeitet', en: 'Started' }, type: 'count' },

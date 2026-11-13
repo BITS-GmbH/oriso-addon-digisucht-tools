@@ -43,6 +43,14 @@ DigiSucht tool (`src/questions.mjs`, formal and informal).
   drop its cached answer, so the tool appears for the client right away.
 - Messages: saving and releasing report success or failure through the host's `notify` (mount
   context, contract `oriso-addon/v1`); on a host without `notify` the message is shown in the tool.
+- Core gates: before a new release the backend asks the host API (`/addons/host/gates`). If the
+  Träger's DPA does not allow new counselling, the release is refused with 409 and the counsellor sees
+  why; if the host cannot tell, the release goes ahead. Existing releases and answers stay usable.
+- Sharing (switching from not shared to shared) also notifies the client's counsellors
+  (`recipient: "counsellors"`, slot `consultant.session`).
+- Deletion: the manifest subscribes to `user.deleted`. `POST /events` (service token only) removes a
+  deleted client's releases and answers, and replaces a deleted counsellor in `released_by`. Repeated
+  or unknown events are fine.
 - Statistics: `GET /stats?tenantId=` with the AddonService's service token.
 - Data: SQLite (`node:sqlite`) in `DATA_FILE` (default `/data/tools.db`), one row per client and
   tool for the release and for the answers. Columns added later (`releases.opened_at`) are added on
@@ -52,7 +60,6 @@ DigiSucht tool (`src/questions.mjs`, formal and informal).
 
 ## Not yet
 
-- Deleting a client's data when the account is deleted (needs ORISO deletion events).
 - PDF export and the central data export.
 
 ## Development

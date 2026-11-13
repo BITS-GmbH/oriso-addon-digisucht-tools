@@ -35,6 +35,7 @@ const counsellorWithoutClient = token({ sub: 'consultant-1', roles: ['consultant
 const service = token({ sub: 'addonservice', roles: ['addon-service'] });
 
 let settings = { intro: 'Hallo', allowSharing: true };
+let gates = { dpa: { status: 'VALID', newCounsellingAllowed: true } };
 let hostBehaviour = 'ok';
 let hostCalls = [];
 let server;
@@ -52,6 +53,14 @@ const startHost = () =>
 		if (req.url === '/addons/host/settings') {
 			res.writeHead(200, { 'Content-Type': 'application/json' });
 			return res.end(JSON.stringify(settings));
+		}
+		if (req.url === '/addons/host/gates') {
+			if (gates === null) {
+				res.writeHead(502);
+				return res.end();
+			}
+			res.writeHead(200, { 'Content-Type': 'application/json' });
+			return res.end(JSON.stringify(gates));
 		}
 		const chunks = [];
 		for await (const chunk of req) {
@@ -266,7 +275,7 @@ describe('host notifications and audit entries', () => {
 		assert.equal(takeHostCalls().length, 4);
 	});
 
-	it('audits sharing by the client once and notifies nobody', async () => {
+	it('audits sharing by the client once and notifies the counsellors', async () => {
 		await release(counsellorFor('asker-15'));
 		takeHostCalls();
 		const auth = askerToken('asker-15');
@@ -291,11 +300,98 @@ describe('host notifications and audit entries', () => {
 					},
 					subject: 'self'
 				}
+			},
+			{
+				method: 'POST',
+				path: '/addons/host/notifications',
+				authorization: `Bearer ${auth}`,
+				body: {
+					recipient: 'counsellors',
+					appId: 'goals',
+					important: false,
+					title: { de: 'Antworten geteilt', en: 'Answers shared' },
+					text: {
+						de: 'Eine ratsuchende Person hat ihre Antworten zu „Ausgangssituation und Ziele“ mit Ihnen geteilt.',
+						en: 'A client shared their answers to “Starting point and goals” with you.'
+					},
+					target: { slot: 'consultant.session' }
+				}
 			}
 		]);
+		hostBehaviour = 'ok';
 
 		await save(true);
 		assert.deepEqual(takeHostCalls(), []);
+	});
+});
+
+describe('core gates', () => {
+	beforeEach(() => {
+		hostBehaviour = 'ok';
+		takeHostCalls();
+	});
+	after(() => {
+		gates = { dpa: { status: 'VALID', newCounsellingAllowed: true } };
+	});
+
+	it('refuses a new release while the DPA does not allow new counselling', async () => {
+		gates = { dpa: { status: 'OUTDATED', newCounsellingAllowed: false } };
+		const refused = await call('/api/goals/client/release', { auth: counsellorFor('asker-30'), method: 'POST' });
+		assert.equal(refused.status, 409);
+		assert.equal(refused.body.error, 'dpa');
+		assert.equal((await call('/api/goals', { auth: askerToken('asker-30') })).body.released, false);
+		assert.deepEqual(takeHostCalls(), []);
+	});
+
+	it('keeps an existing release usable when the gate closes later', async () => {
+		gates = { dpa: { status: 'VALID', newCounsellingAllowed: true } };
+		assert.equal((await call('/api/goals/client/release', { auth: counsellorFor('asker-31'), method: 'POST' })).status, 200);
+		gates = { dpa: { status: 'OUTDATED', newCounsellingAllowed: false } };
+		assert.equal((await call('/api/goals/client/release', { auth: counsellorFor('asker-31'), method: 'POST' })).status, 200);
+		const auth = askerToken('asker-31');
+		assert.equal((await call('/api/goals', { auth, method: 'PUT', body: { answers: { goal: 'a' } } })).status, 200);
+	});
+
+	it('releases when the host cannot tell the gate', async () => {
+		gates = null;
+		assert.equal((await call('/api/goals/client/release', { auth: counsellorFor('asker-32'), method: 'POST' })).status, 200);
+	});
+});
+
+describe('lifecycle events', () => {
+	it('accepts events from the AddonService only', async () => {
+		const event = { id: 'e0', type: 'user.deleted', userId: 'asker-40', role: 'asker', tenantId: 1 };
+		assert.equal((await call('/events', { method: 'POST', body: event })).status, 401);
+		assert.equal((await call('/events', { auth: asker, method: 'POST', body: event })).status, 403);
+		assert.equal((await call('/events', { auth: service, method: 'POST', body: event })).status, 204);
+	});
+
+	it('deletes a deleted client and keeps others, also when the event comes twice', async () => {
+		hostBehaviour = 'ok';
+		gates = { dpa: { status: 'VALID', newCounsellingAllowed: true } };
+		for (const id of ['asker-41', 'asker-42']) {
+			await call('/api/goals/client/release', { auth: counsellorFor(id), method: 'POST' });
+			await call('/api/goals', { auth: askerToken(id), method: 'PUT', body: { answers: { goal: 'x' }, shared: true } });
+		}
+		const event = { id: 'e1', type: 'user.deleted', userId: 'asker-41', role: 'asker', tenantId: 1 };
+		assert.equal((await call('/events', { auth: service, method: 'POST', body: event })).status, 204);
+		assert.equal((await call('/events', { auth: service, method: 'POST', body: event })).status, 204);
+
+		const gone = await call('/api/goals/client', { auth: counsellorFor('asker-41') });
+		assert.equal(gone.body.released, false);
+		assert.equal(gone.body.started, false);
+		const kept = await call('/api/goals/client', { auth: counsellorFor('asker-42') });
+		assert.equal(kept.body.released, true);
+		assert.equal(kept.body.shared, true);
+	});
+
+	it('forgets a deleted counsellor in releases and ignores other events', async () => {
+		await call('/api/goals/client/release', { auth: counsellorFor('asker-43'), method: 'POST' });
+		const consultantDeleted = { id: 'e2', type: 'user.deleted', userId: 'consultant-1', role: 'consultant', tenantId: 1 };
+		assert.equal((await call('/events', { auth: service, method: 'POST', body: consultantDeleted })).status, 204);
+		assert.equal((await call('/api/goals/client', { auth: counsellorFor('asker-43') })).body.released, true);
+		const other = { id: 'e3', type: 'session.deleted', sessionId: 5, tenantId: 1 };
+		assert.equal((await call('/events', { auth: service, method: 'POST', body: other })).status, 204);
 	});
 });
 

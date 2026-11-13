@@ -50,6 +50,9 @@ export const openStore = (file) => {
 		INSERT INTO entries (tenant_id, asker_id, tool, answers, shared, updated_at) VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT (tenant_id, asker_id, tool) DO UPDATE SET answers = excluded.answers, shared = excluded.shared, updated_at = excluded.updated_at
 	`);
+	const deleteReleasesOf = db.prepare('DELETE FROM releases WHERE asker_id = ?');
+	const deleteEntriesOf = db.prepare('DELETE FROM entries WHERE asker_id = ?');
+	const forgetReleaser = db.prepare("UPDATE releases SET released_by = 'deleted' WHERE released_by = ?");
 	const counts = db.prepare(`
 		SELECT
 			(SELECT COUNT(*) FROM releases WHERE tenant_id = ? AND tool = ?) AS released,
@@ -75,6 +78,14 @@ export const openStore = (file) => {
 		saveEntry(tenantId, askerId, answers, shared) {
 			upsertEntry.run(tenantId, askerId, TOOL, JSON.stringify(answers), shared ? 1 : 0, new Date().toISOString());
 			return this.entryOf(tenantId, askerId);
+		},
+		/** Removes everything stored about a client; unknown ids are fine. Returns the rows removed. */
+		deleteAsker(askerId) {
+			return Number(deleteReleasesOf.run(askerId).changes) + Number(deleteEntriesOf.run(askerId).changes);
+		},
+		/** A deleted counsellor stays in no release; the release itself belongs to the client. */
+		forgetCounsellor(counsellorId) {
+			return Number(forgetReleaser.run(counsellorId).changes);
 		},
 		statistics(tenantId) {
 			const row = counts.get(tenantId, TOOL, tenantId, TOOL, tenantId, TOOL);

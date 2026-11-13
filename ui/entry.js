@@ -205,6 +205,14 @@ function CounsellorView({ api, locale, notify }) {
 		setReleaseError(null);
 		try {
 			const response = await api('/goals/client/release', { method: 'POST' });
+			if (response.status === 409) {
+				const message =
+					'Freigabe gerade nicht möglich: Der Träger hat den aktuellen Auftragsverarbeitungsvertrag noch nicht bestätigt.';
+				if (!tell(notify, 'warning', message)) {
+					setReleaseError(message);
+				}
+				return;
+			}
 			if (!response.ok) {
 				throw new Error(`HTTP ${response.status}`);
 			}
