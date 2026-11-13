@@ -71,7 +71,19 @@ const useJson = (api, path) => {
 
 const formatDate = (iso, locale) => (iso ? new Date(iso).toLocaleDateString(locale || 'de') : '');
 
-function AskerView({ api, informal, locale }) {
+/**
+ * Shows a message through the host's notifications (contract oriso-addon/v1, `notify`). Hosts
+ * without `notify` get false back, and the view shows the message inline instead.
+ */
+const tell = (notify, type, message) => {
+	if (typeof notify !== 'function') {
+		return false;
+	}
+	notify({ type, text: message });
+	return true;
+};
+
+function AskerView({ api, informal, locale, notify }) {
 	const [{ loading, data, error }, , setState] = useJson(api, '/goals');
 	const [answers, setAnswers] = useState({});
 	const [shared, setShared] = useState(false);
@@ -122,8 +134,12 @@ function AskerView({ api, informal, locale }) {
 			const entry = await response.json();
 			setState((previous) => ({ ...previous, data: { ...previous.data, ...entry } }));
 			setSaved(entry.updatedAt);
+			tell(notify, 'success', text(informal, 'Ihre Antworten sind gespeichert.', 'Deine Antworten sind gespeichert.'));
 		} catch (reason) {
-			setSaveError(reason.message);
+			const message = `Speichern hat nicht geklappt (${reason.message}).`;
+			if (!tell(notify, 'error', message)) {
+				setSaveError(message);
+			}
 		} finally {
 			setSaving(false);
 		}
@@ -168,11 +184,11 @@ function AskerView({ api, informal, locale }) {
 			h('button', { type: 'submit', style: styles.button, disabled: saving }, saving ? 'Wird gespeichert …' : 'Speichern'),
 			saved && h('span', { style: styles.muted }, `Gespeichert am ${formatDate(saved, locale)}`)
 		),
-		saveError && h('p', { style: styles.error, role: 'alert' }, `Speichern hat nicht geklappt (${saveError}).`)
+		saveError && h('p', { style: styles.error, role: 'alert' }, saveError)
 	);
 }
 
-function CounsellorView({ api, locale }) {
+function CounsellorView({ api, locale, notify }) {
 	const [{ loading, data, error }, reload] = useJson(api, '/goals/client');
 	const [releasing, setReleasing] = useState(false);
 	const [releaseError, setReleaseError] = useState(null);
@@ -193,8 +209,12 @@ function CounsellorView({ api, locale }) {
 				throw new Error(`HTTP ${response.status}`);
 			}
 			await reload();
+			tell(notify, 'success', 'Das Tool ist freigegeben. Die ratsuchende Person wird benachrichtigt.');
 		} catch (reason) {
-			setReleaseError(reason.message);
+			const message = `Freigabe hat nicht geklappt (${reason.message}).`;
+			if (!tell(notify, 'error', message)) {
+				setReleaseError(message);
+			}
 		} finally {
 			setReleasing(false);
 		}
@@ -227,7 +247,7 @@ function CounsellorView({ api, locale }) {
 					h('p', { style: styles.answer }, data.answers[question.id])
 				)
 			),
-		releaseError && h('p', { style: styles.error, role: 'alert' }, `Freigabe hat nicht geklappt (${releaseError}).`)
+		releaseError && h('p', { style: styles.error, role: 'alert' }, releaseError)
 	);
 }
 

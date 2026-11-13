@@ -41,6 +41,8 @@ DigiSucht tool (`src/questions.mjs`, formal and informal).
   with `badge: 1` until their first `GET /api/goals` (stored as `opened_at` of the release);
   counsellors always see it, without a badge. The release notification makes the AddonService
   drop its cached answer, so the tool appears for the client right away.
+- Messages: saving and releasing report success or failure through the host's `notify` (mount
+  context, contract `oriso-addon/v1`); on a host without `notify` the message is shown in the tool.
 - Statistics: `GET /stats?tenantId=` with the AddonService's service token.
 - Data: SQLite (`node:sqlite`) in `DATA_FILE` (default `/data/tools.db`), one row per client and
   tool for the release and for the answers. Columns added later (`releases.opened_at`) are added on
