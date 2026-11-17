@@ -4,6 +4,7 @@ export const manifest = {
 	name: NAME,
 	version: '0.1.0',
 	contract: 'oriso-addon/v1',
+	readme: 'https://raw.githubusercontent.com/BITS-GmbH/oriso-addon-digisucht-tools/main/docs/README.md',
 	react: '^19',
 	ui: '/ui/entry.js',
 	settings: '/schema/settings.json',
