@@ -67,7 +67,8 @@ export const cleanAnswers = (answers) => {
 /** The UI bundle and the module with the questions it shares with the server. */
 export const UI_FILES = {
 	'/ui/entry.js': new URL('../ui/entry.js', import.meta.url),
-	'/ui/questions.mjs': new URL('./questions.mjs', import.meta.url)
+	'/ui/questions.mjs': new URL('./questions.mjs', import.meta.url),
+	'/ui/icons/goals.svg': new URL('../ui/icons/goals.svg', import.meta.url)
 };
 
 const parseInstant = (value) => {
@@ -187,7 +188,7 @@ export const createApp = ({ store, verify, host = null, uiFiles = UI_FILES }) =>
 				return json(res, 200, { status: 'UP' });
 			}
 			if (Object.hasOwn(uiFiles, path)) {
-				return send(res, 200, 'text/javascript; charset=utf-8', await readFile(uiFiles[path]), {
+				return send(res, 200, path.endsWith('.svg') ? 'image/svg+xml' : 'text/javascript; charset=utf-8', await readFile(uiFiles[path]), {
 					'Cache-Control': 'no-cache'
 				});
 			}

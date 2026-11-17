@@ -19,8 +19,20 @@ export const manifest = {
 		{
 			id: 'goals',
 			title: { de: 'Ausgangssituation und Ziele', en: 'Starting point and goals' },
-			slots: ['asker.navigation', 'consultant.session', 'consultant.asker-profile'],
-			visibility: 'dynamic'
+			description: {
+				de: 'Fragen zur Ausgangslage, die Sie mit Ihrer Beratung teilen können',
+				en: 'Questions about your situation you can share with your counsellor'
+			},
+			icon: '/ui/icons/goals.svg',
+			slots: ['asker.navigation', 'asker.session-menu', 'consultant.session', 'consultant.asker-profile'],
+			visibility: 'dynamic',
+			screenshots: [
+				{
+					slot: 'asker.navigation',
+					url: 'https://raw.githubusercontent.com/BITS-GmbH/oriso-addon-digisucht-tools/main/docs/img/fragebogen.png',
+					caption: { de: 'Fragebogen der ratsuchenden Person', en: 'The client questionnaire' }
+				}
+			]
 		}
 	],
 	health: '/health'

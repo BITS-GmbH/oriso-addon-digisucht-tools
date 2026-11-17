@@ -289,7 +289,7 @@ function CounsellorView({ api, locale, notify }) {
 }
 
 function GoalsTool(props) {
-	return props.slot === 'asker.navigation' ? h(AskerView, props) : h(CounsellorView, props);
+	return props.slot.startsWith('asker.') ? h(AskerView, props) : h(CounsellorView, props);
 }
 
 export async function mount(props) {

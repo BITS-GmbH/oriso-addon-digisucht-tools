@@ -126,7 +126,7 @@ describe('public files', () => {
 	it('serves manifest, settings schema and both UI modules', async () => {
 		const manifest = await call('/.well-known/oriso-addon.json');
 		assert.equal(manifest.body.name, 'digisucht-tools');
-		assert.deepEqual(manifest.body.apps[0].slots, ['asker.navigation', 'consultant.session', 'consultant.asker-profile']);
+		assert.deepEqual(manifest.body.apps[0].slots, ['asker.navigation', 'asker.session-menu', 'consultant.session', 'consultant.asker-profile']);
 		assert.equal((await call('/schema/settings.json')).body.type, 'object');
 		assert.match((await call('/ui/entry.js')).body, /export async function mount/);
 		assert.match((await call('/ui/questions.mjs')).body, /export const QUESTIONS/);
