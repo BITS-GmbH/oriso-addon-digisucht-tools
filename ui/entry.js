@@ -2,7 +2,8 @@
 // from the host on globalThis.__ORISO_ADDON_SHARED__, the questions from the server's module.
 import { QUESTIONS, MAX_ANSWER_LENGTH } from './questions.mjs';
 
-const { react: React, reactDomClient } = globalThis.__ORISO_ADDON_SHARED__;
+const shared = globalThis.__ORISO_ADDON_SHARED__;
+const { react: React, reactDomClient } = shared;
 const h = React.createElement;
 const { useCallback, useEffect, useState } = React;
 const roots = new Map();
@@ -34,6 +35,7 @@ const styles = {
 		background: color('--m3-surface', '#fff'),
 		color: 'inherit'
 	},
+	body: { display: 'grid', gap: '16px', padding: '20px 24px' },
 	row: { display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', marginTop: '20px' },
 	button: {
 		border: 'none',
@@ -49,6 +51,31 @@ const styles = {
 	answer: { margin: '4px 0 0', whiteSpace: 'pre-wrap' },
 	error: { color: color('--m3-error', '#b42318'), margin: '12px 0 0' }
 };
+
+// The host's component kit (ADR-034). Hosts without one get these look-alikes.
+const fallbackKit = {
+	Provider: ({ children }) => children,
+	Card: ({ children }) => h('div', { style: styles.card }, children),
+	Button: ({ children, onClick, disabled }) =>
+		h('button', { type: 'button', style: styles.button, onClick, disabled }, children),
+	Textarea: ({ id, label, value, onChange, maxLength }) =>
+		h(
+			'div',
+			null,
+			h('label', { style: styles.label, htmlFor: id }, label),
+			h('textarea', { id, style: styles.textarea, maxLength, value, onChange: (event) => onChange(event.target.value) })
+		),
+	Checkbox: ({ label, checked, onChange }) =>
+		h(
+			'label',
+			{ style: { ...styles.row, cursor: 'pointer' } },
+			h('input', { type: 'checkbox', checked, onChange: (event) => onChange(event.target.checked) }),
+			label
+		),
+	Notice: ({ title, children }) => h('p', { style: styles.error, role: 'alert' }, title, children ? ` ${children}` : ''),
+	Spinner: () => h('p', { style: styles.muted }, 'Wird geladen …')
+};
+const kit = shared.kit ?? fallbackKit;
 
 const text = (informal, formal, du) => (informal ? du : formal);
 
@@ -99,15 +126,15 @@ function AskerView({ api, informal, locale, notify }) {
 	}, [data]);
 
 	if (loading && !data) {
-		return h('div', { style: styles.card }, text(informal, 'Wird geladen …', 'Wird geladen …'));
+		return h(kit.Spinner);
 	}
 	if (error) {
-		return h('div', { style: styles.card }, h('p', { style: styles.error }, `Das Tool konnte nicht geladen werden (${error}).`));
+		return h(kit.Notice, { type: 'error', title: 'Das Tool konnte nicht geladen werden.' }, error);
 	}
 	if (!data.released) {
 		return h(
-			'div',
-			{ style: styles.card },
+			kit.Card,
+			null,
 			h('p', { style: { margin: 0 } },
 				text(
 					informal,
@@ -118,8 +145,7 @@ function AskerView({ api, informal, locale, notify }) {
 		);
 	}
 
-	const save = async (event) => {
-		event.preventDefault();
+	const save = async () => {
 		setSaving(true);
 		setSaveError(null);
 		try {
@@ -154,37 +180,36 @@ function AskerView({ api, informal, locale, notify }) {
 		);
 
 	return h(
-		'form',
-		{ style: styles.card, onSubmit: save },
-		h('p', { style: styles.muted }, intro),
-		...QUESTIONS.map((question) =>
-			h(
-				'div',
-				{ key: question.id },
-				h('label', { style: styles.label, htmlFor: `goals-${question.id}` }, informal ? question.informal : question.formal),
-				h('textarea', {
-					id: `goals-${question.id}`,
-					style: styles.textarea,
-					maxLength: MAX_ANSWER_LENGTH,
-					value: answers[question.id] ?? '',
-					onChange: (event) => setAnswers({ ...answers, [question.id]: event.target.value })
-				})
-			)
-		),
-		data.allowSharing &&
-			h(
-				'label',
-				{ style: { ...styles.row, cursor: 'pointer' } },
-				h('input', { type: 'checkbox', checked: shared, onChange: (event) => setShared(event.target.checked) }),
-				text(informal, 'Antworten mit meiner Beratung teilen', 'Antworten mit meiner Beratung teilen')
-			),
+		kit.Card,
+		null,
 		h(
 			'div',
-			{ style: styles.row },
-			h('button', { type: 'submit', style: styles.button, disabled: saving }, saving ? 'Wird gespeichert …' : 'Speichern'),
-			saved && h('span', { style: styles.muted }, `Gespeichert am ${formatDate(saved, locale)}`)
-		),
-		saveError && h('p', { style: styles.error, role: 'alert' }, saveError)
+			{ style: styles.body },
+			h('p', { style: styles.muted }, intro),
+			...QUESTIONS.map((question) =>
+				h(kit.Textarea, {
+					key: question.id,
+					id: `goals-${question.id}`,
+					label: informal ? question.informal : question.formal,
+					maxLength: MAX_ANSWER_LENGTH,
+					value: answers[question.id] ?? '',
+					onChange: (value) => setAnswers((previous) => ({ ...previous, [question.id]: value }))
+				})
+			),
+			data.allowSharing &&
+				h(kit.Checkbox, {
+					label: text(informal, 'Antworten mit meiner Beratung teilen', 'Antworten mit meiner Beratung teilen'),
+					checked: shared,
+					onChange: setShared
+				}),
+			h(
+				'div',
+				{ style: styles.row },
+				h(kit.Button, { onClick: save, disabled: saving }, saving ? 'Wird gespeichert …' : 'Speichern'),
+				saved && h('span', { style: styles.muted }, `Gespeichert am ${formatDate(saved, locale)}`)
+			),
+			saveError && h(kit.Notice, { type: 'error', title: saveError })
+		)
 	);
 }
 
@@ -194,10 +219,10 @@ function CounsellorView({ api, locale, notify }) {
 	const [releaseError, setReleaseError] = useState(null);
 
 	if (loading && !data) {
-		return h('div', { style: styles.card }, 'Wird geladen …');
+		return h(kit.Spinner);
 	}
 	if (error) {
-		return h('div', { style: styles.card }, h('p', { style: styles.error }, `Status nicht verfügbar (${error}).`));
+		return h(kit.Notice, { type: 'error', title: 'Status nicht verfügbar.' }, error);
 	}
 
 	const release = async () => {
@@ -237,25 +262,29 @@ function CounsellorView({ api, locale, notify }) {
 				: [`Bearbeitet am ${formatDate(data.updatedAt, locale)}, nicht geteilt`, color('--m3-secondary-container', '#e5f5fc')];
 
 	return h(
-		'div',
-		{ style: styles.card },
-		h('span', { style: { ...styles.status, background: status[1] } }, status[0]),
-		!data.released &&
-			h(
-				'div',
-				{ style: styles.row },
-				h('button', { type: 'button', style: styles.button, onClick: release, disabled: releasing }, releasing ? 'Wird freigegeben …' : 'Tool freigeben')
-			),
-		data.answers &&
-			QUESTIONS.filter((question) => data.answers[question.id]).map((question) =>
+		kit.Card,
+		null,
+		h(
+			'div',
+			{ style: styles.body },
+			h('span', { style: { ...styles.status, background: status[1] } }, status[0]),
+			!data.released &&
 				h(
 					'div',
-					{ key: question.id },
-					h('p', { style: styles.label }, question.formal),
-					h('p', { style: styles.answer }, data.answers[question.id])
-				)
-			),
-		releaseError && h('p', { style: styles.error, role: 'alert' }, releaseError)
+					{ style: styles.row },
+					h(kit.Button, { onClick: release, disabled: releasing }, releasing ? 'Wird freigegeben …' : 'Tool freigeben')
+				),
+		data.answers &&
+				QUESTIONS.filter((question) => data.answers[question.id]).map((question) =>
+					h(
+						'div',
+						{ key: question.id },
+						h('p', { style: styles.label }, question.formal),
+						h('p', { style: styles.answer }, data.answers[question.id])
+					)
+				),
+			releaseError && h(kit.Notice, { type: 'warning', title: releaseError })
+		)
 	);
 }
 
@@ -266,11 +295,11 @@ function GoalsTool(props) {
 export async function mount(props) {
 	const root = reactDomClient.createRoot(props.domElement);
 	roots.set(props.domElement, root);
-	root.render(h(GoalsTool, props));
+	root.render(h(kit.Provider, null, h(GoalsTool, props)));
 }
 
 export async function update(props) {
-	roots.get(props.domElement)?.render(h(GoalsTool, props));
+	roots.get(props.domElement)?.render(h(kit.Provider, null, h(GoalsTool, props)));
 }
 
 export async function unmount(props) {
